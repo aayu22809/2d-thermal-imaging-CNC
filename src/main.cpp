@@ -67,6 +67,8 @@ public:
             stepper.run();
         }
         enable(false);  // Disable motor when done
+
+        if (stepper.currentPosition() != 0) isHomed = false;
     }
 
 
@@ -92,20 +94,28 @@ MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_P
 MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN);
 
 
+
 // Start Grid Scan
-void startScan() {
+void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
     if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
         Serial.println("Error: Axes not homed.");
         return;
     }
 
-    isScanning = true;
-    Serial.println("X,Y,Temperature");  // CSV Header
+    Serial.println("<SCAN_START>");
+    Serial.print("Start X: "); Serial.println(xMin);
+    Serial.print("End X: "); Serial.println(xMax);
+    Serial.print("Start Y: "); Serial.println(yMin);
+    Serial.print("End Y: "); Serial.println(yMax);
+    Serial.print("Resolution (mm/cell): "); Serial.println(stepSize);
+    Serial.println("X,Y,Temperature");
 
-    for (float y = Y_MIN; y <= Y_MAX; y += STEP_SIZE) {
+    isScanning = true;
+
+    for (float y = yMin; y <= yMax; y += stepSize) {
         verticalSystem.moveToPosition(y);
 
-        for (float x = X_MIN; x <= X_MAX; x += STEP_SIZE) {
+        for (float x = xMin; x <= xMax; x += stepSize) {
             horizontalSystem.moveToPosition(x);
             float temp = thermocouple.readCelsius();
             Serial.print(x, 2);
@@ -117,7 +127,7 @@ void startScan() {
     }
 
     isScanning = false;
-    Serial.println("Scan complete.");
+    Serial.println("<SCAN_END>");
 }
 
 // Process Serial Commands
@@ -126,7 +136,7 @@ void processSerialCommand(String command) {
     command.toLowerCase();
 
     if (command == "scan") {
-        startScan();
+        startScan(X_MIN, X_MAX, Y_MIN, Y_MAX, STEP_SIZE);
     } else if (command == "home") {
         Serial.println("Homing...");
         verticalSystem.home();
