@@ -22,7 +22,7 @@ const float STEPS_PER_MM = 50.0;
 const int MAX_SPEED = 800;
 const int ACCELERATION = 800;
 
-// Grid Limits
+// Grid Limits & Step Size
 const float X_MIN = 90.0;
 const float X_MAX = 110.0;
 const float Y_MIN = 150.0;
@@ -30,8 +30,6 @@ const float Y_MAX = 200.0;
 const float STEP_SIZE = 1.0;
 
 // System State Variables
-volatile bool vLimitTriggered = false;
-volatile bool hLimitTriggered = false;
 bool isScanning = false;
 float currentX = X_MIN;
 float currentY = Y_MIN;
@@ -43,19 +41,13 @@ MAX6675 thermocouple(THERMO_SCK_PIN, THERMO_CS_PIN, THERMO_SO_PIN);
 // MotorSystem Class
 class MotorSystem {
 public:
-    const int limitSwitchPin;
-    const int enablePin;
-    const int directionPin;
-    const float stepsPerMM;
-    bool isHomed;
     AccelStepper stepper;
+    bool isHomed;
 
-    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin, float stepsPerMM)
+    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin)
       : stepper(AccelStepper::DRIVER, stepPin, dirPin),
         limitSwitchPin(limitPin),
         enablePin(enablePin),
-        directionPin(dirPin),
-        stepsPerMM(stepsPerMM),
         isHomed(false) {
         pinMode(limitSwitchPin, INPUT_PULLUP);
         pinMode(enablePin, OUTPUT);
@@ -68,118 +60,90 @@ public:
         digitalWrite(enablePin, enabled ? LOW : HIGH);
     }
 
-    float getCurrentPositionMM() {
-        return stepper.currentPosition() / stepsPerMM;
-    }
-
-    void setTargetPositionMM(float mm) {
-        stepper.moveTo(mm * stepsPerMM);
-    }
-
-    bool moveToHome() {
-        Serial.println("Starting homing...");
-
-        unsigned long startTime = millis();
-        stepper.setMaxSpeed(MAX_SPEED / 2);
-        stepper.setAcceleration(ACCELERATION / 2);
-        stepper.move(500);
+    void moveToPosition(float position) {
+        enable(true);  // Enable motor before moving
+        stepper.moveTo(position * STEPS_PER_MM);
         while (stepper.distanceToGo() != 0) {
             stepper.run();
-            if (millis() - startTime > 5000) {
-                Serial.println("Homing timeout (move away).");
-                return false;
-            }
         }
+        enable(false);  // Disable motor when done
+    }
 
-        Serial.println("Moving to limit...");
-        startTime = millis();
-        stepper.setMaxSpeed(MAX_SPEED / 2);
+
+    bool home() {
+        enable(true);  // Enable before homing
+        stepper.setMaxSpeed(MAX_SPEED / 2.);
         stepper.move(-1000000);
-        while (!digitalRead(limitSwitchPin) == LOW) {
-            stepper.run();
-            if (millis() - startTime > 5000) {
-                Serial.println("Homing timeout (limit switch).");
-                return false;
-            }
-        }
+        while (digitalRead(limitSwitchPin) == HIGH) stepper.run();
         stepper.stop();
         stepper.setCurrentPosition(0);
-        stepper.setMaxSpeed(MAX_SPEED);
         isHomed = true;
-        Serial.println("Homing complete.");
+        enable(false);  // Disable motor after homing
         return true;
     }
+
+private:
+    const int limitSwitchPin;
+    const int enablePin;
 };
 
 // Motor Objects
-MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_PIN, STEPS_PER_MM);
-MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN, STEPS_PER_MM);
+MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_PIN);
+MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN);
 
-// Limit Switch Interrupts
-void vLimitISR() { vLimitTriggered = true; }
-void hLimitISR() { hLimitTriggered = true; }
 
-// Temperature Reading (Corrected for MAX6675)
-double getTemp() {
-    return thermocouple.readCelsius();
+// Start Grid Scan
+void startScan() {
+    if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
+        Serial.println("Error: Axes not homed.");
+        return;
+    }
+
+    isScanning = true;
+    Serial.println("X,Y,Temperature");  // CSV Header
+
+    for (float y = Y_MIN; y <= Y_MAX; y += STEP_SIZE) {
+        verticalSystem.moveToPosition(y);
+
+        for (float x = X_MIN; x <= X_MAX; x += STEP_SIZE) {
+            horizontalSystem.moveToPosition(x);
+            float temp = thermocouple.readCelsius();
+            Serial.print(x, 2);
+            Serial.print(",");
+            Serial.print(y, 2);
+            Serial.print(",");
+            Serial.println(temp, 2);
+        }
+    }
+
+    isScanning = false;
+    Serial.println("Scan complete.");
 }
 
-// Command Processor
+// Process Serial Commands
 void processSerialCommand(String command) {
     command.trim();
     command.toLowerCase();
 
     if (command == "scan") {
-        if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
-            Serial.println("Error: Axes not homed.");
-            return;
-        }
-        isScanning = true;
-        Serial.println("Scan started: X,Y,Temperature");
-        return;
-    }
-
-    if (command == "stop") {
-        isScanning = false;
-        verticalSystem.enable(false);
-        horizontalSystem.enable(false);
-        Serial.println("Scan stopped.");
-        return;
-    }
-
-    char axis = command.charAt(0);
-    float position = command.substring(1).toFloat();
-
-    if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
-        Serial.println("Error: System not homed.");
-        return;
-    }
-
-    if (axis == 'x') {
-        horizontalSystem.enable(true);
-        horizontalSystem.setTargetPositionMM(position);
-        Serial.print("Moving X to "); Serial.println(position);
-    } else if (axis == 'y') {
-        verticalSystem.enable(true);
-        verticalSystem.setTargetPositionMM(position);
-        Serial.print("Moving Y to "); Serial.println(position);
+        startScan();
     } else if (command == "home") {
         Serial.println("Homing...");
-        if (verticalSystem.moveToHome() && horizontalSystem.moveToHome()) {
-            Serial.println("Homing complete.");
-        } else {
-            Serial.println("Homing failed.");
-        }
-    }
-}
-
-// Position Reporting (Every 1s)
-void reportPosition() {
-    if (millis() - lastReportTime >= 1000) {
-        Serial.print("X: "); Serial.print(horizontalSystem.getCurrentPositionMM(), 2);
-        Serial.print(" Y: "); Serial.print(verticalSystem.getCurrentPositionMM(), 2);
-        Serial.print(" | Temp: "); Serial.println(getTemp());
-        lastReportTime = millis();
+        verticalSystem.home();
+        horizontalSystem.home();
+        Serial.println("Homing complete.");
+    } else if (command.startsWith("x=")) {
+        sscanf(command.c_str(), "x=%f", &currentX);
+        Serial.print("Moving to X: ");
+        Serial.println(currentX);
+        verticalSystem.moveToPosition(currentX);
+    } else if (command.startsWith("y=")) {
+        sscanf(command.c_str(), "y=%f", &currentY);
+        Serial.print("Moving to Y: ");
+        Serial.println(currentY);
+        horizontalSystem.moveToPosition(currentY);
+    } else {
+        Serial.println("Invalid command.");
     }
 }
 
@@ -187,19 +151,6 @@ void reportPosition() {
 void setup() {
     Serial.begin(9600);
     Serial.println("2D Platform Controller Ready.");
-
-    pinMode(V_LIMIT_SWITCH_PIN, INPUT_PULLUP);
-    pinMode(H_LIMIT_SWITCH_PIN, INPUT_PULLUP);
-
-    attachInterrupt(digitalPinToInterrupt(V_LIMIT_SWITCH_PIN), vLimitISR, FALLING);
-    attachInterrupt(digitalPinToInterrupt(H_LIMIT_SWITCH_PIN), hLimitISR, FALLING);
-
-    Serial.println("Homing system...");
-    if (verticalSystem.moveToHome() && horizontalSystem.moveToHome()) {
-        Serial.println("Homing complete.");
-    } else {
-        Serial.println("Homing failed.");
-    }
 }
 
 // Main Loop
@@ -208,20 +159,4 @@ void loop() {
         String command = Serial.readStringUntil('\n');
         processSerialCommand(command);
     }
-
-    if (vLimitTriggered) {
-        Serial.println("Vertical limit switch hit!");
-        verticalSystem.moveToHome();
-        vLimitTriggered = false;
-    }
-
-    if (hLimitTriggered) {
-        Serial.println("Horizontal limit switch hit!");
-        horizontalSystem.moveToHome();
-        hLimitTriggered = false;
-    }
-
-    verticalSystem.stepper.run();
-    horizontalSystem.stepper.run();
-    reportPosition();
 }
