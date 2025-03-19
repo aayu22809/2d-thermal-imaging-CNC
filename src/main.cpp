@@ -26,11 +26,10 @@ const int MAX_SPEED = 800;
 const int ACCELERATION = 800;
 
 // Grid Limits & Step Size
-const float X_MIN = 90.0;
-const float X_MAX = 110.0;
-const float Y_MIN = 150.0;
-const float Y_MAX = 200.0;
-const float STEP_SIZE = 1.0;
+const float X_MIN = 0.0;
+const float X_MAX = 100.0;
+const float Y_MIN = 0.0;
+const float Y_MAX = 100.0;
 
 // System State Variables
 bool isScanning = false;
@@ -70,25 +69,18 @@ public:
     }
 
     void moveToPosition(float position) {
+        if (position < X_MIN || position < Y_MIN || position > X_MAX || position > Y_MAX) {
+            Serial.println("Movement out of bounds! Please stay within the defined area.");
+            return;  // Prevent the movement
+        }
+
         enable(true);  // Enable motor before moving
         stepper.moveTo(position * STEPS_PER_MM);
-
         while (stepper.distanceToGo() != 0) {
             stepper.run();
-            if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW)) {  // If limit switch is triggered
-                isLimitHit = true;  // Mark that the limit switch was triggered
-                stepper.stop();     // Immediately stop the motor
-                stepper.setCurrentPosition(0);  // Optionally reset position to 0 or set a safe value
-                Serial.println("Limit switch hit during movement! Stopping motor.");
-                break;
-            }
         }
-
-        if (!isLimitHit) {
-            enable(false);  // Disable motor after successful movement
-        }
+        enable(false);  // Disable motor when done
     }
-
 
     bool home() {
         isHomed = false;
@@ -99,14 +91,28 @@ public:
         stepper.move(-1000000);  // Move motor towards the limit switch
 
         unsigned long startTime = millis();
-        while (digitalRead(limitSwitchPin) == HIGH && millis() - startTime < 5000) {
+        while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
             stepper.run();
+        }
+        if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW) ) {  // If limit switch is pressed
+            stepper.stop();
+            stepper.setCurrentPosition(0);  // Set current position to 0
+
+            stepper.setMaxSpeed(MAX_SPEED / 4.);
+            stepper.move(1000000);  // Move motor away from the limit switch
+
+            startTime = millis();
+            while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
+                stepper.run();
+            }
+
             if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW) ) {  // If limit switch is pressed
                 stepper.stop();
                 stepper.setCurrentPosition(0);  // Set current position to 0
                 isHomed = true;
+                enable(false);  // Disable motor
+                stepper.setMaxSpeed(MAX_SPEED); // Restore max speed
                 Serial.println("Homing complete.");
-                break;
             }
         }
 
@@ -179,10 +185,10 @@ void processSerialCommand(String command) {
     command.toLowerCase();
 
     if (command == "scan") {
-        if (command.length() > 5) {
-            sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f)", &X_MIN, &Y_MIN, &X_MAX, &Y_MAX);
+        float xMin, yMin, xMax, yMax, stepSize;
+        if (sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f), %f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
+            startScan(xMin, xMax, yMin, yMax, stepSize);
         }
-        startScan(X_MIN, X_MAX, Y_MIN, Y_MAX, STEP_SIZE);
     } else if (command == "home") {
         Serial.println("Homing...");
         verticalSystem.home();
