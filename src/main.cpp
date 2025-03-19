@@ -1,6 +1,9 @@
 #include <AccelStepper.h>
 #include <MAX6675.h>
 
+// Plasma POI temperature
+#define PLASMA_POI_TEMPERATURE 35.0
+
 // Pin Definitions
 const int V_LIMIT_SWITCH_PIN = 18;
 const int V_STEP_PIN = 22;
@@ -31,6 +34,7 @@ const float STEP_SIZE = 1.0;
 
 // System State Variables
 bool isScanning = false;
+bool liveMonitoring = false;
 float currentX = X_MIN;
 float currentY = Y_MIN;
 unsigned long lastReportTime = 0;
@@ -118,6 +122,13 @@ void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
         for (float x = xMin; x <= xMax; x += stepSize) {
             horizontalSystem.moveToPosition(x);
             float temp = thermocouple.readCelsius();
+            if (temp > PLASMA_POI_TEMPERATURE) { // If the temperature is above the plasma POI, slow down the motors
+                horizontalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
+                verticalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
+            } else {
+                verticalSystem.stepper.setMaxSpeed(MAX_SPEED);
+                horizontalSystem.stepper.setMaxSpeed(MAX_SPEED);
+            }
             Serial.print(x, 2);
             Serial.print(",");
             Serial.print(y, 2);
@@ -136,23 +147,29 @@ void processSerialCommand(String command) {
     command.toLowerCase();
 
     if (command == "scan") {
+        if (command.length() > 5) {
+            sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f)", &X_MIN, &Y_MIN, &X_MAX, &Y_MAX);
+        }
         startScan(X_MIN, X_MAX, Y_MIN, Y_MAX, STEP_SIZE);
     } else if (command == "home") {
         Serial.println("Homing...");
         verticalSystem.home();
         horizontalSystem.home();
         Serial.println("Homing complete.");
-    } else if (command.startsWith("x=")) {
-        sscanf(command.c_str(), "x=%f", &currentX);
+    } else if (command.startsWith("x")) {
+        sscanf(command.c_str(), "x %f", &currentX);
         Serial.print("Moving to X: ");
         Serial.println(currentX);
         verticalSystem.moveToPosition(currentX);
-    } else if (command.startsWith("y=")) {
+    } else if (command.startsWith("y")) {
         sscanf(command.c_str(), "y=%f", &currentY);
         Serial.print("Moving to Y: ");
         Serial.println(currentY);
         horizontalSystem.moveToPosition(currentY);
-    } else {
+    } else if (command.startsWith("monitor")) {
+        sscanf(command.c_str(), "monitor %d", &liveMonitoring);
+    }
+    else {
         Serial.println("Invalid command.");
     }
 }
@@ -168,5 +185,14 @@ void loop() {
     if (Serial.available()) {
         String command = Serial.readStringUntil('\n');
         processSerialCommand(command);
+    }
+    if (liveMonitoring) {
+        if (isScanning) {
+            Serial.println("Scanning...");
+        } else {
+            char buffer[100];
+            sprintf(buffer, "X: %.2f, Y: %.2f, Temperature: %.2f", currentX, currentY, thermocouple.readCelsius());
+            Serial.println(buffer);
+        }
     }
 }
