@@ -47,12 +47,16 @@ class MotorSystem {
 public:
     AccelStepper stepper;
     bool isHomed;
+    bool isNormallyClosed;
 
-    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin)
+    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin, bool normallyClosed = true)
       : stepper(AccelStepper::DRIVER, stepPin, dirPin),
         limitSwitchPin(limitPin),
         enablePin(enablePin),
-        isHomed(false) {
+        isHomed(false),
+        isLimitHit(false),
+        isNormallyClosed(normallyClosed)
+    {
         pinMode(limitSwitchPin, INPUT_PULLUP);
         pinMode(enablePin, OUTPUT);
         digitalWrite(enablePin, LOW);
@@ -60,37 +64,65 @@ public:
         stepper.setAcceleration(ACCELERATION);
     }
 
-    void enable(bool enabled) {
+    void enable(bool enabled) const
+    {
         digitalWrite(enablePin, enabled ? LOW : HIGH);
     }
 
     void moveToPosition(float position) {
         enable(true);  // Enable motor before moving
         stepper.moveTo(position * STEPS_PER_MM);
+
         while (stepper.distanceToGo() != 0) {
             stepper.run();
+            if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW)) {  // If limit switch is triggered
+                isLimitHit = true;  // Mark that the limit switch was triggered
+                stepper.stop();     // Immediately stop the motor
+                stepper.setCurrentPosition(0);  // Optionally reset position to 0 or set a safe value
+                Serial.println("Limit switch hit during movement! Stopping motor.");
+                break;
+            }
         }
-        enable(false);  // Disable motor when done
 
-        if (stepper.currentPosition() != 0) isHomed = false;
+        if (!isLimitHit) {
+            enable(false);  // Disable motor after successful movement
+        }
     }
 
 
     bool home() {
-        enable(true);  // Enable before homing
+        isHomed = false;
+        isLimitHit = false;  // Reset limit hit flag
+
+        enable(true);  // Enable the motor before homing
         stepper.setMaxSpeed(MAX_SPEED / 2.);
-        stepper.move(-1000000);
-        while (digitalRead(limitSwitchPin) == HIGH) stepper.run();
-        stepper.stop();
-        stepper.setCurrentPosition(0);
-        isHomed = true;
-        enable(false);  // Disable motor after homing
-        return true;
+        stepper.move(-1000000);  // Move motor towards the limit switch
+
+        unsigned long startTime = millis();
+        while (digitalRead(limitSwitchPin) == HIGH && millis() - startTime < 5000) {
+            stepper.run();
+            if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW) ) {  // If limit switch is pressed
+                stepper.stop();
+                stepper.setCurrentPosition(0);  // Set current position to 0
+                isHomed = true;
+                Serial.println("Homing complete.");
+                break;
+            }
+        }
+
+        if (!isHomed) {
+            stepper.stop();
+            enable(false);  // Disable motor
+            Serial.println("Homing failed: Limit switch not pressed.");
+        }
+
+        return isHomed;
     }
 
 private:
     const int limitSwitchPin;
     const int enablePin;
+    bool isLimitHit;
 };
 
 // Motor Objects
