@@ -5,31 +5,31 @@
 #define PLASMA_POI_TEMPERATURE 35.0
 
 // Pin Definitions
-const int V_LIMIT_SWITCH_PIN = 18;
-const int V_STEP_PIN = 22;
-const int V_DIR_PIN = 24;
-const int V_ENABLE_PIN = 26;
+constexpr int V_LIMIT_SWITCH_PIN = 18;
+constexpr int V_STEP_PIN = 22;
+constexpr int V_DIR_PIN = 24;
+constexpr int V_ENABLE_PIN = 26;
 
-const int H_LIMIT_SWITCH_PIN = 19;
-const int H_STEP_PIN = 23;
-const int H_DIR_PIN = 25;
-const int H_ENABLE_PIN = 27;
+constexpr int H_LIMIT_SWITCH_PIN = 19;
+constexpr int H_STEP_PIN = 23;
+constexpr int H_DIR_PIN = 25;
+constexpr int H_ENABLE_PIN = 27;
 
 // Thermocouple Pins (SPI)
-const int THERMO_SCK_PIN = 6;
-const int THERMO_CS_PIN = 5;
-const int THERMO_SO_PIN = 7;
+constexpr int THERMO_SCK_PIN = 6;
+constexpr int THERMO_CS_PIN = 5;
+constexpr int THERMO_SO_PIN = 7;
 
 // Motor Parameters
-const float STEPS_PER_MM = 50.0;
-const int MAX_SPEED = 800;
-const int ACCELERATION = 800;
+constexpr float STEPS_PER_MM = 50.0;
+constexpr int MAX_SPEED = 800;
+constexpr int ACCELERATION = 800;
 
 // Grid Limits & Step Size
-const float X_MIN = 0.0;
-const float X_MAX = 100.0;
-const float Y_MIN = 0.0;
-const float Y_MAX = 100.0;
+constexpr float X_MIN = 0.0;
+constexpr float X_MAX = 100.0;
+constexpr float Y_MIN = 0.0;
+constexpr float Y_MAX = 100.0;
 
 // System State Variables
 bool isScanning = false;
@@ -37,6 +37,8 @@ bool liveMonitoring = false;
 float currentX = X_MIN;
 float currentY = Y_MIN;
 unsigned long lastReportTime = 0;
+constexpr int MAX_HOMING_DISTANCE = 1000000;
+
 
 // Thermocouple Object
 MAX6675 thermocouple(THERMO_SCK_PIN, THERMO_CS_PIN, THERMO_SO_PIN);
@@ -68,10 +70,10 @@ public:
         digitalWrite(enablePin, enabled ? LOW : HIGH);
     }
 
-    void moveToPosition(float position) {
+    boolean moveToPosition(float position) {
         if (position < X_MIN || position < Y_MIN || position > X_MAX || position > Y_MAX) {
-            Serial.println("Movement out of bounds! Please stay within the defined area.");
-            return;  // Prevent the movement
+            Serial.println("Error: Movement out of bounds!");
+            return false;  // Prevent the movement
         }
 
         enable(true);  // Enable motor before moving
@@ -80,6 +82,11 @@ public:
             stepper.run();
         }
         enable(false);  // Disable motor when done
+
+        if (stepper.distanceToGo() == 0 || stepper.currentPosition() != position * STEPS_PER_MM) {
+            return true;
+        }
+        return false;
     }
 
     bool home() {
@@ -88,7 +95,7 @@ public:
 
         enable(true);  // Enable the motor before homing
         stepper.setMaxSpeed(MAX_SPEED / 2.);
-        stepper.move(-1000000);  // Move motor towards the limit switch
+        stepper.move(-MAX_HOMING_DISTANCE);  // Move motor towards the limit switch
 
         unsigned long startTime = millis();
         while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
@@ -99,7 +106,7 @@ public:
             stepper.setCurrentPosition(0);  // Set current position to 0
 
             stepper.setMaxSpeed(MAX_SPEED / 4.);
-            stepper.move(1000000);  // Move motor away from the limit switch
+            stepper.move(MAX_HOMING_DISTANCE);  // Move motor away from the limit switch
 
             startTime = millis();
             while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
@@ -112,17 +119,24 @@ public:
                 isHomed = true;
                 enable(false);  // Disable motor
                 stepper.setMaxSpeed(MAX_SPEED); // Restore max speed
-                Serial.println("Homing complete.");
+                Serial.println("Info: Homing complete.");
             }
         }
-
         if (!isHomed) {
             stepper.stop();
             enable(false);  // Disable motor
-            Serial.println("Homing failed: Limit switch not pressed.");
+            Serial.println("Error: Homing failed.");
         }
 
         return isHomed;
+    }
+
+    void moveToPosition(float position, float max_speed)
+    {
+        int current_speed = stepper.maxSpeed();
+        stepper.setMaxSpeed(max_speed);
+        moveToPosition(position);
+        stepper.setMaxSpeed(current_speed);
     }
 
 private:
@@ -180,34 +194,122 @@ void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
 }
 
 // Process Serial Commands
+
+/*
+ These commands follow the G-code syntax
+     G0          Rapid move (move to X, Y at a specified feed rate)
+     G1          Linear move (move to X, Y at a specified feed rate)
+     G28         Home all axes
+     M105        Report current temperature
+     M3 / M5     Start/stop scanning
+ */
 void processSerialCommand(String command) {
     command.trim();
     command.toLowerCase();
 
-    if (command == "scan") {
+
+    // G-code Parsing
+    if (command.startsWith("g") || command.startsWith("m")) {
+        float x = currentX, y = currentY, f = MAX_SPEED; // Default to current position and max speed
+        bool hasX = false, hasY = false, hasF = false;
+
+        // Extract parameters (e.g. "X10.5 Y20.0 F500")
+        for (int i = 1; i < command.length(); i++) {
+            if (command[i] == 'x' && i + 1 < command.length()) {
+                int startIdx = i + 1;
+                while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
+                    i++;
+                }
+                x = command.substring(startIdx, i + 1).toFloat();
+                hasX = true;
+            } else if (command[i] == 'y' && i + 1 < command.length()) {
+                int startIdx = i + 1;
+                while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
+                    i++;
+                }
+                y = command.substring(startIdx, i + 1).toFloat();
+                hasY = true;
+            } else if (command[i] == 'f' && i + 1 < command.length()) {
+                int startIdx = i + 1;
+                while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
+                    i++;
+                }
+                f = command.substring(startIdx, i + 1).toFloat();
+                hasF = true;
+            }
+        }
+
+        if (command.startsWith("g0") || command.startsWith("g1")) {
+            // Move to position with specified feed rate (F)
+            if (hasX) {
+                horizontalSystem.moveToPosition(x, hasF ? f : MAX_SPEED);
+                currentX = x;
+            }
+            if (hasY) {
+                verticalSystem.moveToPosition(y, hasF ? f : MAX_SPEED);
+                currentY = y;
+            }
+            Serial.println("ok");
+        } else if (command == "g28") {
+            verticalSystem.home();
+            horizontalSystem.home();
+            currentX = 0;
+            currentY = 0;
+            Serial.println("ok");
+        } else if (command == "m105") {
+            float temp = thermocouple.readCelsius();
+            Serial.print("T:");
+            Serial.println(temp, 2);
+            Serial.println("ok");
+        } else if (command == "m3") {
+            if (command.length() > 4) {
+                float xMin, yMin, xMax, yMax, stepSize;
+                if (sscanf(command.c_str(), "m3 (%f,%f) -> (%f,%f), %f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
+                    startScan(xMin, xMax, yMin, yMax, stepSize);
+                }
+            }
+            // Start a default scan (customize as needed)
+            startScan(X_MIN, X_MAX, Y_MIN, Y_MAX, 1.0); // Example: full-size, 1mm step
+            Serial.println("ok");
+        } else if (command == "m5") {
+            isScanning = false; // Stop scan
+            Serial.println("ok");
+        } else {
+            Serial.println("Error: Unknown G-code.");
+        }
+    }
+
+
+    // Existing Custom Commands
+    else if (command.startsWith("scan")) {
         float xMin, yMin, xMax, yMax, stepSize;
-        if (sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f), %f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
+        if (sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f) res=%f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
             startScan(xMin, xMax, yMin, yMax, stepSize);
+        } else {
+            Serial.println("Error: Invalid scan format.");
         }
     } else if (command == "home") {
-        Serial.println("Homing...");
         verticalSystem.home();
         horizontalSystem.home();
-        Serial.println("Homing complete.");
+        currentX = 0;
+        currentY = 0;
     } else if (command.startsWith("x")) {
-        sscanf(command.c_str(), "x %f", &currentX);
-        Serial.print("Moving to X: ");
-        Serial.println(currentX);
-        verticalSystem.moveToPosition(currentX);
+        int tempX;
+        if (sscanf(command.c_str(), "x %f", &tempX) == 1) {
+            if (horizontalSystem.moveToPosition(tempX)) {
+                currentX = tempX;
+            }
+        }
     } else if (command.startsWith("y")) {
-        sscanf(command.c_str(), "y=%f", &currentY);
-        Serial.print("Moving to Y: ");
-        Serial.println(currentY);
-        horizontalSystem.moveToPosition(currentY);
+        int tempY;
+        if (sscanf(command.c_str(), "y %f", &tempY) == 1) {
+            if (verticalSystem.moveToPosition(tempY)) {
+                currentY = tempY;
+            }
+        }
     } else if (command.startsWith("monitor")) {
         sscanf(command.c_str(), "monitor %d", &liveMonitoring);
-    }
-    else {
+    } else {
         Serial.println("Invalid command.");
     }
 }
