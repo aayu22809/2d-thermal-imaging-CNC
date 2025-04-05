@@ -313,6 +313,34 @@ void processSerialCommand(String command) {
         Serial.println("Invalid command.");
     }
 }
+// System Monitor Class to handle status reporting
+class SystemMonitor {
+private:
+    static constexpr unsigned long REPORT_INTERVAL_MS = 1000; // Report every second
+    
+    // Format and print current position and temperature
+    static void reportStatus() {
+        char buffer[100];
+        // Cast float values to double to match %f format specifier
+        sprintf(buffer, "X: %.2f, Y: %.2f, Temperature: %.2f", 
+               (double)currentX, (double)currentY, (double)temperatureSensor.readTemperature());
+        Serial.println(buffer);
+    }
+    
+public:
+    // Update monitoring status
+    static void update() {
+        if (!liveMonitoring) {
+            return;
+        }
+        
+        if (isScanning) {
+            Serial.println("Scanning...");
+        } else {
+            reportStatus();
+        }
+    }
+};
 
 // Setup Function
 void setup() {
@@ -322,17 +350,12 @@ void setup() {
 
 // Main Loop
 void loop() {
+    // Process any incoming serial commands
     if (Serial.available()) {
         String command = Serial.readStringUntil('\n');
-        processSerialCommand(command);
+        CommandProcessor::processCommand(command);
     }
-    if (liveMonitoring) {
-        if (isScanning) {
-            Serial.println("Scanning...");
-        } else {
-            char buffer[100];
-            sprintf(buffer, "X: %.2f, Y: %.2f, Temperature: %.2f", currentX, currentY, thermocouple.readCelsius());
-            Serial.println(buffer);
-        }
-    }
+    
+    // Update system monitoring
+    SystemMonitor::update();
 }
