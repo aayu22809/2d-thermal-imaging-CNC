@@ -699,14 +699,14 @@ private:
         } else if (command == "m5") {
             processScanStopCommand();
         } else {
-            Serial.println("Error: Unknown G-code.");
+            return false;
         }
         
         return true;
     }
     
     // Process custom commands
-    static void processCustomCommands(const String& command) {
+    static boolean processCustomCommands(const String& command) {
         if (command.startsWith("scan")) {
             processCustomScanCommand(command);
         } else if (command == "home") {
@@ -729,8 +729,10 @@ private:
                 Serial.println("Error: Invalid calibrate format. Use: calibrate [known_temperature]");
             }
         } else {
-            Serial.println("Invalid command.");
+            return false;
         }
+
+        return true;
     }
     
 public:
@@ -750,9 +752,12 @@ public:
         if (processGCode(command)) {
             return;
         }
-        
-        // If not G-code, process as custom command
-        processCustomCommands(command);
+        if (processCustomCommands(command)) {
+            return;
+        }
+
+        Serial.println("Error: Unknown command.");
+
     }
 };
 
