@@ -772,11 +772,16 @@ private:
     
     // Format and print current position and temperature
     static void reportStatus() {
-        char buffer[100];
-        // Cast float values to double to match %f format specifier
-        sprintf(buffer, "X: %.2f, Y: %.2f, Temperature: %.2f", 
-               (double)currentX, (double)currentY, (double)temperatureSensor.readTemperature());
-        Serial.println(buffer);
+        // Read the current temperature
+        float temp = temperatureSensor.readTemperature();
+        
+        // Print values directly instead of using sprintf
+        Serial.print("X: ");
+        Serial.print(currentX, 2);
+        Serial.print(", Y: ");
+        Serial.print(currentY, 2);
+        Serial.print(", Temperature: ");
+        Serial.println(temp, 2);
     }
     
 public:
