@@ -150,12 +150,20 @@ MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_P
 MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN);
 
 
-
-// Start Grid Scan
-void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
-    if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
-        Serial.println("Error: Axes not homed.");
-        return;
+// Temperature Sensor Class
+class TemperatureSensor {
+private:
+    // AD8495 parameters
+    static constexpr float VOLTAGE_OFFSET = 1.25;  // Voltage offset at 0°C (in volts)
+    static constexpr float SCALE_FACTOR = 0.005;   // Scale factor (5mV/°C)
+    static constexpr float AREF_VOLTAGE = 5.0;     // Arduino reference voltage (typically 5V)
+    static constexpr int ADC_RESOLUTION = 10;      // ADC resolution (10-bit for most Arduinos)
+    
+    const int sensorPin;
+    
+    // Convert ADC reading to voltage
+    float convertToVoltage(int rawAdc) const {
+        return rawAdc * (AREF_VOLTAGE / (pow(2, ADC_RESOLUTION) - 1));
     }
 
     Serial.println("<SCAN_START>");
@@ -165,6 +173,26 @@ void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
     Serial.print("End Y: "); Serial.println(yMax);
     Serial.print("Resolution (mm/cell): "); Serial.println(stepSize);
     Serial.println("X,Y,Temperature");
+    
+    // Convert voltage to temperature
+    float convertToTemperature(float voltage) const {
+        return (voltage - VOLTAGE_OFFSET) / SCALE_FACTOR;
+    }
+    
+public:
+    explicit TemperatureSensor(int pin) : sensorPin(pin) {}
+    
+    // Get temperature reading from AD8495 breakout
+    float readTemperature() const {
+        int rawValue = analogRead(sensorPin);
+        float voltage = convertToVoltage(rawValue);
+        float temperature = convertToTemperature(voltage);
+        return temperature;
+    }
+};
+
+// Create temperature sensor instance
+TemperatureSensor temperatureSensor(AD8495_PIN);
 
     isScanning = true;
 
@@ -193,25 +221,28 @@ void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
     Serial.println("<SCAN_END>");
 }
 
-// Process Serial Commands
+// Legacy temperature functions - kept for backward compatibility
+#define TC_PIN A0          // set to ADC pin used
+#define AREF 3.3           // set to AREF, typically board voltage like 3.3 or 5.0
+#define ADC_RESOLUTION 10  // set to ADC bit resolution, 10 is default
 
-/*
- These commands follow the G-code syntax
-     G0          Rapid move (move to X, Y at a specified feed rate)
-     G1          Linear move (move to X, Y at a specified feed rate)
-     G28         Home all axes
-     M105        Report current temperature
-     M3 / M5     Start/stop scanning
- */
-void processSerialCommand(String command) {
-    command.trim();
-    command.toLowerCase();
+float reading, voltage, temperature;
 
+float get_voltage(int raw_adc) {
+    return raw_adc * (AREF / (pow(2, ADC_RESOLUTION)-1));
+}
 
-    // G-code Parsing
-    if (command.startsWith("g") || command.startsWith("m")) {
-        float x = currentX, y = currentY, f = MAX_SPEED; // Default to current position and max speed
-        bool hasX = false, hasY = false, hasF = false;
+float get_temperature(float voltage) {
+    return (voltage - 1.25) / 0.005 + 89.89;
+}
+
+float getCelcius() {
+    constexpr float offset = 89.89;
+    reading = analogRead(TC_PIN);
+    voltage = get_voltage(reading);
+    temperature = get_temperature(voltage);
+    return temperature + offset;
+}
 
 // Get temperature from AD8495 breakout
 float getTemperatureFromAD8495() {
@@ -378,6 +409,89 @@ private:
                 currentY = tempY;
             }
         }
+    }
+    
+    // Process monitor command
+    static void processMonitorCommand(const String& command) {
+        int monitorValue;
+        if (sscanf(command.c_str(), "monitor %d", &monitorValue) == 1) {
+            liveMonitoring = (monitorValue != 0);
+        }
+    }
+    
+    // Process G-code commands
+    static bool processGCode(const String& command) {
+        if (!(command.startsWith("g") || command.startsWith("m"))) {
+            return false;
+        }
+        
+        float x = currentX, y = currentY, f = MAX_SPEED; // Default to current position and max speed
+        bool hasX = false, hasY = false, hasF = false;
+        
+        // Extract parameters for movement commands
+        extractMovementParameters(command, x, y, f, hasX, hasY, hasF);
+        
+        // Process specific G-code commands
+        if (command.startsWith("g0") || command.startsWith("g1")) {
+            processMovementCommand(x, y, f, hasX, hasY, hasF);
+        } else if (command == "g28") {
+            processHomingCommand();
+        } else if (command == "m105") {
+            processTemperatureCommand();
+        } else if (command.startsWith("m3")) {
+            processScanStartCommand(command);
+        } else if (command == "m5") {
+            processScanStopCommand();
+        } else {
+            Serial.println("Error: Unknown G-code.");
+        }
+        
+        return true;
+    }
+    
+    // Process custom commands
+    static void processCustomCommands(const String& command) {
+        if (command.startsWith("scan")) {
+            processCustomScanCommand(command);
+        } else if (command == "home") {
+            processCustomHomeCommand();
+        } else if (command.startsWith("x")) {
+            processXAxisCommand(command);
+        } else if (command.startsWith("y")) {
+            processYAxisCommand(command);
+        } else if (command.startsWith("monitor")) {
+            processMonitorCommand(command);
+        } else {
+            Serial.println("Invalid command.");
+        }
+    }
+    
+public:
+    /*
+     These commands follow the G-code syntax
+         G0          Rapid move (move to X, Y at a specified feed rate)
+         G1          Linear move (move to X, Y at a specified feed rate)
+         G28         Home all axes
+         M105        Report current temperature
+         M3 / M5     Start/stop scanning
+     */
+    static void processCommand(String command) {
+        command.trim();
+        command.toLowerCase();
+        
+        // First try to process as G-code
+        if (processGCode(command)) {
+            return;
+        }
+        
+        // If not G-code, process as custom command
+        processCustomCommands(command);
+    }
+};
+
+// Wrapper function to maintain compatibility
+void processSerialCommand(String command) {
+    CommandProcessor::processCommand(command);
 }
 // System Monitor Class to handle status reporting
 class SystemMonitor {
