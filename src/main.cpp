@@ -213,24 +213,34 @@ void processSerialCommand(String command) {
         float x = currentX, y = currentY, f = MAX_SPEED; // Default to current position and max speed
         bool hasX = false, hasY = false, hasF = false;
 
-        // Extract parameters (e.g. "X10.5 Y20.0 F500")
-        for (int i = 1; i < command.length(); i++) {
+// Get temperature from AD8495 breakout
+float getTemperatureFromAD8495() {
+    return temperatureSensor.readTemperature();
+}
+
+// Command Processor Class to handle all command parsing and execution
+class CommandProcessor {
+private:
+    // Extract movement parameters from G-code
+    static void extractMovementParameters(const String& command, float& x, float& y, float& f, 
+                                         bool& hasX, bool& hasY, bool& hasF) {
+        for (unsigned int i = 1; i < command.length(); i++) {
             if (command[i] == 'x' && i + 1 < command.length()) {
-                int startIdx = i + 1;
+                unsigned int startIdx = i + 1;
                 while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
                     i++;
                 }
                 x = command.substring(startIdx, i + 1).toFloat();
                 hasX = true;
             } else if (command[i] == 'y' && i + 1 < command.length()) {
-                int startIdx = i + 1;
+                unsigned int startIdx = i + 1;
                 while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
                     i++;
                 }
                 y = command.substring(startIdx, i + 1).toFloat();
                 hasY = true;
             } else if (command[i] == 'f' && i + 1 < command.length()) {
-                int startIdx = i + 1;
+                unsigned int startIdx = i + 1;
                 while (i + 1 < command.length() && (isdigit(command[i + 1]) || command[i + 1] == '.')) {
                     i++;
                 }
@@ -238,80 +248,136 @@ void processSerialCommand(String command) {
                 hasF = true;
             }
         }
-
-        if (command.startsWith("g0") || command.startsWith("g1")) {
-            // Move to position with specified feed rate (F)
-            if (hasX) {
-                horizontalSystem.moveToPosition(x, hasF ? f : MAX_SPEED);
-                currentX = x;
-            }
-            if (hasY) {
-                verticalSystem.moveToPosition(y, hasF ? f : MAX_SPEED);
-                currentY = y;
-            }
-            Serial.println("ok");
-        } else if (command == "g28") {
-            verticalSystem.home();
-            horizontalSystem.home();
-            currentX = 0;
-            currentY = 0;
-            Serial.println("ok");
-        } else if (command == "m105") {
-            float temp = thermocouple.readCelsius();
-            Serial.print("T:");
-            Serial.println(temp, 2);
-            Serial.println("ok");
-        } else if (command == "m3") {
-            if (command.length() > 4) {
-                float xMin, yMin, xMax, yMax, stepSize;
-                if (sscanf(command.c_str(), "m3 (%f,%f) -> (%f,%f), %f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
-                    startScan(xMin, xMax, yMin, yMax, stepSize);
-                }
-            }
-            // Start a default scan (customize as needed)
-            startScan(X_MIN, X_MAX, Y_MIN, Y_MAX, 1.0); // Example: full-size, 1mm step
-            Serial.println("ok");
-        } else if (command == "m5") {
-            isScanning = false; // Stop scan
-            Serial.println("ok");
-        } else {
-            Serial.println("Error: Unknown G-code.");
-        }
     }
-
-
-    // Existing Custom Commands
-    else if (command.startsWith("scan")) {
+    
+    // Process G0/G1 movement commands
+    static void processMovementCommand(float x, float y, float f, bool hasX, bool hasY, bool hasF) {
+        if (hasX) {
+            horizontalSystem.moveToPosition(x, hasF ? f : MAX_SPEED);
+            currentX = x;
+        }
+        if (hasY) {
+            verticalSystem.moveToPosition(y, hasF ? f : MAX_SPEED);
+            currentY = y;
+        }
+        Serial.println("ok");
+    }
+    
+    // Process G28 homing command
+    static void processHomingCommand() {
+        verticalSystem.home();
+        horizontalSystem.home();
+        currentX = 0;
+        currentY = 0;
+        Serial.println("ok");
+    }
+    
+    // Process M105 temperature report command
+    static void processTemperatureCommand() {
+        float temp = temperatureSensor.readTemperature();
+        Serial.print("T:");
+        Serial.println(temp, 2);
+        Serial.println("ok");
+    }
+    
+    // Process M3 scan start command
+    static void processScanStartCommand(const String& command) {
+        Serial.println(command);
+        float x1 = 0, y1 = 0, x2 = 0, y2 = 0, res = 0;
+        
+        // Debug homing status
+        Serial.print("Homing status - X: ");
+        Serial.print(horizontalSystem.isHomed ? "Homed" : "Not Homed");
+        Serial.print(", Y: ");
+        Serial.println(verticalSystem.isHomed ? "Homed" : "Not Homed");
+        
+        // Simple regex-like pattern matching using String functions
+        int firstParenOpen = command.indexOf('(');
+        int firstParenClose = command.indexOf(')', firstParenOpen);
+        int firstComma = command.indexOf(',', firstParenOpen);
+        
+        int secondParenOpen = command.indexOf('(', firstParenClose);
+        int secondParenClose = command.indexOf(')', secondParenOpen);
+        int secondComma = command.indexOf(',', secondParenOpen);
+        
+        int lastComma = command.lastIndexOf(',');
+        
+        // Extract coordinates if all delimiters are found
+        if (firstParenOpen > 0 && firstParenClose > firstParenOpen && firstComma > firstParenOpen && 
+            secondParenOpen > 0 && secondParenClose > secondParenOpen && secondComma > secondParenOpen && 
+            lastComma > 0) {
+            
+            // Extract first point (x1,y1)
+            x1 = command.substring(firstParenOpen + 1, firstComma).toFloat();
+            y1 = command.substring(firstComma + 1, firstParenClose).toFloat();
+            
+            // Extract second point (x2,y2)
+            x2 = command.substring(secondParenOpen + 1, secondComma).toFloat();
+            y2 = command.substring(secondComma + 1, secondParenClose).toFloat();
+            
+            // Extract resolution
+            res = command.substring(lastComma + 1).toFloat();
+            
+            // Check if we got valid numbers
+            if (res > 0) {
+                Serial.print("Scan: (");
+                Serial.print(x1); Serial.print(","); Serial.print(y1);
+                Serial.print(") -> (");
+                Serial.print(x2); Serial.print(","); Serial.print(y2);
+                Serial.print("), Step: "); Serial.println(res);
+                
+                // Make sure we're passing parameters in the correct order
+                startScan(x1, x2, y1, y2, res);
+                Serial.println("ok");
+                return;
+            }
+        }
+        
+        Serial.println("Error: Invalid m3 format. Use: m3 (x1,y1) -> (x2,y2), res");
+    }
+    
+    // Process M5 scan stop command
+    static void processScanStopCommand() {
+        isScanning = false;
+        Serial.println("ok");
+    }
+    
+    // Process custom scan command
+    static void processCustomScanCommand(const String& command) {
         float xMin, yMin, xMax, yMax, stepSize;
         if (sscanf(command.c_str(), "scan (%f,%f) -> (%f,%f) res=%f", &xMin, &yMin, &xMax, &yMax, &stepSize) == 5) {
             startScan(xMin, xMax, yMin, yMax, stepSize);
         } else {
             Serial.println("Error: Invalid scan format.");
         }
-    } else if (command == "home") {
+    }
+    
+    // Process custom home command
+    static void processCustomHomeCommand() {
         verticalSystem.home();
         horizontalSystem.home();
         currentX = 0;
         currentY = 0;
-    } else if (command.startsWith("x")) {
-        int tempX;
+    }
+    
+    // Process X axis movement command
+    static void processXAxisCommand(const String& command) {
+        float tempX;
         if (sscanf(command.c_str(), "x %f", &tempX) == 1) {
             if (horizontalSystem.moveToPosition(tempX)) {
                 currentX = tempX;
             }
         }
-    } else if (command.startsWith("y")) {
-        int tempY;
+    }
+    
+    // Process Y axis movement command
+    static void processYAxisCommand(const String& command) {
+        float tempY;
         if (sscanf(command.c_str(), "y %f", &tempY) == 1) {
             if (verticalSystem.moveToPosition(tempY)) {
                 currentY = tempY;
             }
         }
-    } else if (command.startsWith("monitor")) {
-        sscanf(command.c_str(), "monitor %d", &liveMonitoring);
-    } else {
-        Serial.println("Invalid command.");
-    }
 }
 // System Monitor Class to handle status reporting
 class SystemMonitor {
