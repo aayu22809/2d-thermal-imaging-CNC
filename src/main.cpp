@@ -43,20 +43,74 @@ constexpr int MAX_HOMING_DISTANCE = 1000000;
 // Thermocouple Object
 MAX6675 thermocouple(THERMO_SCK_PIN, THERMO_CS_PIN, THERMO_SO_PIN);
 
+// Define axis types
+enum AxisType {
+    AXIS_X,
+    AXIS_Y,
+    AXIS_Z,
+    AXIS_A  // For future rotational axis
+};
+
 // MotorSystem Class
+// Fix the member initialization order in the constructor
 class MotorSystem {
 public:
     AccelStepper stepper;
     bool isHomed;
     bool isNormallyClosed;
+    float stepsPerMm;
+    AxisType axisType;
+    float minLimit;
+    float maxLimit;
 
-    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin, bool normallyClosed = true)
+private:
+    const int limitSwitchPin;
+    const int enablePin;
+    bool isLimitHit;
+    static constexpr unsigned long HOMING_TIMEOUT_MS = 15000;
+    static constexpr unsigned long MOVEMENT_TIMEOUT_MS = 5000;
+
+    // Check if limit switch is triggered
+    bool isLimitSwitchTriggered() const {
+        return digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW);
+    }
+    
+    // Wait for limit switch with timeout
+    bool waitForLimitSwitch(unsigned long timeoutMs) {
+        unsigned long startTime = millis();
+        while (!isLimitSwitchTriggered() && (millis() - startTime < timeoutMs)) {
+            stepper.run();
+        }
+        return isLimitSwitchTriggered();
+    }
+    
+    // Log position error
+    void logPositionError(float position) const {
+        Serial.print("Error: Movement out of bounds for ");
+        Serial.print(getAxisName());
+        Serial.print(" axis! (");
+        Serial.print(position);
+        Serial.print(" not in range ");
+        Serial.print(minLimit);
+        Serial.print("-");
+        Serial.print(maxLimit);
+        Serial.println(")");
+    }
+
+public:
+    MotorSystem(int dirPin, int stepPin, int enablePin, int limitPin, 
+                AxisType axis, float minPos, float maxPos, 
+                float stepsPerMm = STEPS_PER_MM, bool normallyClosed = true)
       : stepper(AccelStepper::DRIVER, stepPin, dirPin),
+        isHomed(false),
+        isNormallyClosed(normallyClosed),
+        stepsPerMm(stepsPerMm),
+        axisType(axis),
+        minLimit(minPos),
+        maxLimit(maxPos),
         limitSwitchPin(limitPin),
         enablePin(enablePin),
-        isHomed(false),
-        isLimitHit(false),
-        isNormallyClosed(normallyClosed)
+        isLimitHit(false)
     {
         pinMode(limitSwitchPin, INPUT_PULLUP);
         pinMode(enablePin, OUTPUT);
@@ -65,89 +119,114 @@ public:
         stepper.setAcceleration(ACCELERATION);
     }
 
-    void enable(bool enabled) const
-    {
+    // Enable or disable the motor
+    void enable(bool enabled) const {
         digitalWrite(enablePin, enabled ? LOW : HIGH);
     }
 
+    // Move to a specific position with timeout
     boolean moveToPosition(float position) {
-        if (position < X_MIN || position < Y_MIN || position > X_MAX || position > Y_MAX) {
-            Serial.println("Error: Movement out of bounds!");
+        // Check bounds based on this motor's limits
+        if (position < minLimit || position > maxLimit) {
+            logPositionError(position);
             return false;  // Prevent the movement
         }
 
         enable(true);  // Enable motor before moving
-        stepper.moveTo(position * STEPS_PER_MM);
-        while (stepper.distanceToGo() != 0) {
-            stepper.run();
-        }
-        enable(false);  // Disable motor when done
-
-        if (stepper.distanceToGo() == 0 || stepper.currentPosition() != position * STEPS_PER_MM) {
-            return true;
-        }
-        return false;
-    }
-
-    bool home() {
-        isHomed = false;
-        isLimitHit = false;  // Reset limit hit flag
-
-        enable(true);  // Enable the motor before homing
-        stepper.setMaxSpeed(MAX_SPEED / 2.);
-        stepper.move(-MAX_HOMING_DISTANCE);  // Move motor towards the limit switch
-
+        stepper.moveTo(position * stepsPerMm);
+        
+        // Add timeout to prevent motor from being enabled too long
         unsigned long startTime = millis();
-        while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
+        while (stepper.distanceToGo() != 0 && (millis() - startTime < MOVEMENT_TIMEOUT_MS)) {
             stepper.run();
         }
-        if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW) ) {  // If limit switch is pressed
-            stepper.stop();
-            stepper.setCurrentPosition(0);  // Set current position to 0
+        
+        // Always disable motor when done
+        enable(false);
 
-            stepper.setMaxSpeed(MAX_SPEED / 4.);
-            stepper.move(MAX_HOMING_DISTANCE);  // Move motor away from the limit switch
-
-            startTime = millis();
-            while (digitalRead(limitSwitchPin) == (isNormallyClosed ? LOW : HIGH) && millis() - startTime < 5000) { // While the limit switch is not pressed
-                stepper.run();
-            }
-
-            if (digitalRead(limitSwitchPin) == (isNormallyClosed ? HIGH : LOW) ) {  // If limit switch is pressed
-                stepper.stop();
-                stepper.setCurrentPosition(0);  // Set current position to 0
-                isHomed = true;
-                enable(false);  // Disable motor
-                stepper.setMaxSpeed(MAX_SPEED); // Restore max speed
-                Serial.println("Info: Homing complete.");
-            }
-        }
-        if (!isHomed) {
-            stepper.stop();
-            enable(false);  // Disable motor
-            Serial.println("Error: Homing failed.");
-        }
-
-        return isHomed;
+        return (stepper.distanceToGo() == 0);
     }
 
-    void moveToPosition(float position, float max_speed)
-    {
+    // Move to position with specified speed
+    void moveToPosition(float position, float max_speed) {
         int current_speed = stepper.maxSpeed();
         stepper.setMaxSpeed(max_speed);
         moveToPosition(position);
         stepper.setMaxSpeed(current_speed);
     }
 
-private:
-    const int limitSwitchPin;
-    const int enablePin;
-    bool isLimitHit;
+    // Helper method to get axis name for debugging
+    const char* getAxisName() const {
+        switch (axisType) {
+            case AXIS_X: return "X";
+            case AXIS_Y: return "Y";
+            case AXIS_Z: return "Z";
+            case AXIS_A: return "A";
+            default: return "Unknown";
+        }
+    }
+
+    // First phase of homing - move to limit switch
+    bool homeFirstPhase() {
+        stepper.setMaxSpeed(MAX_SPEED / 2.);
+        stepper.move(-MAX_HOMING_DISTANCE);  // Move motor towards the limit switch
+        
+        if (waitForLimitSwitch(HOMING_TIMEOUT_MS)) {
+            stepper.stop();
+            stepper.setCurrentPosition(0);  // Set current position to 0
+            return true;
+        }
+        
+        stepper.stop();
+        return false;
+    }
+    
+    // Second phase of homing - move away from limit switch
+    bool homeSecondPhase() {
+        stepper.setMaxSpeed(MAX_SPEED / 4.);
+        stepper.move(MAX_HOMING_DISTANCE);  // Move motor away from the limit switch
+        
+        if (waitForLimitSwitch(MOVEMENT_TIMEOUT_MS)) {
+            stepper.stop();
+            stepper.setCurrentPosition(0);  // Set current position to 0
+            return true;
+        }
+        
+        stepper.stop();
+        return false;
+    }
+
+    // Complete homing sequence
+    bool home() {
+        isHomed = false;
+        isLimitHit = false;  // Reset limit hit flag
+        enable(true);  // Enable the motor before homing
+        
+        if (!homeFirstPhase()) {
+            enable(false);  // Disable motor
+            Serial.println("Error: Homing failed in first phase.");
+            return false;
+        }
+        
+        if (!homeSecondPhase()) {
+            enable(false);  // Disable motor
+            Serial.println("Error: Homing failed in second phase.");
+            return false;
+        }
+        
+        isHomed = true;
+        enable(false);  // Disable motor
+        stepper.setMaxSpeed(MAX_SPEED); // Restore max speed
+        Serial.println("Info: Homing complete.");
+        return true;
+    }
 };
 
 // Motor Objects
-MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_PIN);
-MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN);
+MotorSystem verticalSystem(V_DIR_PIN, V_STEP_PIN, V_ENABLE_PIN, V_LIMIT_SWITCH_PIN, 
+                          AXIS_Y, Y_MIN, Y_MAX, STEPS_PER_MM_Y);
+MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH_PIN, 
+                            AXIS_X, X_MIN, X_MAX, STEPS_PER_MM_X);
 
 
 // Temperature Sensor Class
@@ -165,14 +244,6 @@ private:
     float convertToVoltage(int rawAdc) const {
         return rawAdc * (AREF_VOLTAGE / (pow(2, ADC_RESOLUTION) - 1));
     }
-
-    Serial.println("<SCAN_START>");
-    Serial.print("Start X: "); Serial.println(xMin);
-    Serial.print("End X: "); Serial.println(xMax);
-    Serial.print("Start Y: "); Serial.println(yMin);
-    Serial.print("End Y: "); Serial.println(yMax);
-    Serial.print("Resolution (mm/cell): "); Serial.println(stepSize);
-    Serial.println("X,Y,Temperature");
     
     // Convert voltage to temperature
     float convertToTemperature(float voltage) const {
@@ -193,6 +264,96 @@ public:
 
 // Create temperature sensor instance
 TemperatureSensor temperatureSensor(AD8495_PIN);
+
+
+// Scanner Class to handle grid scanning operations
+class Scanner {
+private:
+    // Adjust motor speed based on temperature
+    static void adjustMotorSpeed(float temperature) {
+        if (temperature > PLASMA_POI_TEMPERATURE) {
+            horizontalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
+            verticalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
+        } else {
+            verticalSystem.stepper.setMaxSpeed(MAX_SPEED);
+            horizontalSystem.stepper.setMaxSpeed(MAX_SPEED);
+        }
+    }
+    
+    // Log temperature data for current position
+    static void logPositionData(float x, float y, float temperature) {
+        Serial.print(x, 2);
+        Serial.print(",");
+        Serial.print(y, 2);
+        Serial.print(",");
+        Serial.println(temperature, 2);
+    }
+    
+    // Scan a single row from left to right
+    static void scanRowLeftToRight(float xStart, float xEnd, float y, float stepSize) {
+        for (float x = xStart; x <= xEnd; x += stepSize) {
+            horizontalSystem.moveToPosition(x);
+            delay(10); // Small delay for motor cooling and stabilization
+            
+            float temp = temperatureSensor.readTemperature();
+            adjustMotorSpeed(temp);
+            logPositionData(x, y, temp);
+        }
+    }
+    
+    // Scan a single row from right to left
+    static void scanRowRightToLeft(float xStart, float xEnd, float y, float stepSize) {
+        for (float x = xEnd; x >= xStart; x -= stepSize) {
+            horizontalSystem.moveToPosition(x);
+            delay(10); // Small delay for motor cooling and stabilization
+            
+            float temp = temperatureSensor.readTemperature();
+            adjustMotorSpeed(temp);
+            logPositionData(x, y, temp);
+        }
+    }
+    
+    // Print scan parameters
+    static void printScanParameters(float xMin, float xMax, float yMin, float yMax, float stepSize) {
+        Serial.println("<SCAN_START>");
+        Serial.print("Start X: "); Serial.println(xMin);
+        Serial.print("End X: "); Serial.println(xMax);
+        Serial.print("Start Y: "); Serial.println(yMin);
+        Serial.print("End Y: "); Serial.println(yMax);
+        Serial.print("Resolution (mm/cell): "); Serial.println(stepSize);
+        Serial.println("X,Y,Temperature");
+    }
+
+public:
+    // Start a grid scan
+    static void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
+        // Check if axes are homed
+        if (!verticalSystem.isHomed || !horizontalSystem.isHomed) {
+            Serial.println("Error: Axes not homed. Please run G28 or 'home' command first.");
+            return;
+        }
+
+        // Print scan parameters
+        printScanParameters(xMin, xMax, yMin, yMax, stepSize);
+        
+        // Move to starting position one axis at a time with complete movement
+        // First move X axis and wait for it to complete
+        horizontalSystem.enable(true);
+        horizontalSystem.stepper.moveTo(xMin * horizontalSystem.stepsPerMm);
+        while (horizontalSystem.stepper.distanceToGo() != 0) {
+            horizontalSystem.stepper.run();
+        }
+        horizontalSystem.enable(false);
+        delay(100);
+        
+        // Then move Y axis and wait for it to complete
+        verticalSystem.enable(true);
+        verticalSystem.stepper.moveTo(yMin * verticalSystem.stepsPerMm);
+        while (verticalSystem.stepper.distanceToGo() != 0) {
+            verticalSystem.stepper.run();
+        }
+        verticalSystem.enable(false);
+        delay(100);
 
     isScanning = true;
 
