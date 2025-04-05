@@ -327,6 +327,22 @@ public:
         float temperature = convertToTemperature(voltage);
         return temperature;
     }
+    
+    // Calibrate the sensor to a known temperature
+    void calibrate(float knownTemperature) {
+        int rawValue = analogRead(sensorPin);
+        float voltage = convertToVoltage(rawValue);
+        float uncalibratedTemp = (voltage - VOLTAGE_OFFSET) / SCALE_FACTOR;
+        
+        // Print calibration information
+        Serial.println("Temperature Sensor Calibration:");
+        Serial.print("Raw ADC: "); Serial.println(rawValue);
+        Serial.print("Voltage: "); Serial.print(voltage); Serial.println(" V");
+        Serial.print("Uncalibrated temperature: "); Serial.print(uncalibratedTemp); Serial.println(" °C");
+        Serial.print("Known temperature: "); Serial.print(knownTemperature); Serial.println(" °C");
+        Serial.print("Suggested TEMP_CALIBRATION_OFFSET: "); 
+        Serial.println(knownTemperature - uncalibratedTemp);
+    }
 };
 
 // Create temperature sensor instance
@@ -701,6 +717,17 @@ private:
             processYAxisCommand(command);
         } else if (command.startsWith("monitor")) {
             processMonitorCommand(command);
+        } else if (command.startsWith("calibrate")) {
+            // Extract the temperature value directly using substring
+            String tempStr = command.substring(10); // Skip "calibrate "
+            tempStr.trim(); // Remove any whitespace
+            
+            if (tempStr.length() > 0) {
+                float knownTemp = tempStr.toFloat();
+                temperatureSensor.calibrate(knownTemp);
+            } else {
+                Serial.println("Error: Invalid calibrate format. Use: calibrate [known_temperature]");
+            }
         } else {
             Serial.println("Invalid command.");
         }
