@@ -170,33 +170,96 @@ public:
     }
 
     // First phase of homing - move to limit switch
+    bool limitReached = isLimitSwitchTriggered();
     bool homeFirstPhase() {
+        Serial.print("Starting homing first phase for ");
+        Serial.print(getAxisName());
+        Serial.println(" axis...");
         stepper.setMaxSpeed(MAX_SPEED / 2.);
+        
+        // Check if we're already at the limit switch
+        if (isLimitSwitchTriggered()) {
+            Serial.println("Already at limit switch, moving away slightly...");
+            // Move away from the limit switch first
+            stepper.move(100);  // Move a small amount away
+            while (stepper.distanceToGo() != 0 && isLimitSwitchTriggered()) {
+                stepper.run();
+            }
+            delay(100);  // Small delay for stability
+        }
+        
+        // Now move towards the limit switch
+        Serial.println("Moving towards limit switch...");
         stepper.move(-MAX_HOMING_DISTANCE);  // Move motor towards the limit switch
         
-        if (waitForLimitSwitch(HOMING_TIMEOUT_MS)) {
-            stepper.stop();
-            stepper.setCurrentPosition(0);  // Set current position to 0
-            return true;
+        // Wait for limit switch with improved feedback
+        unsigned long startTime = millis();
+
+        
+        while (!limitReached && (millis() - startTime < HOMING_TIMEOUT_MS)) {
+            stepper.run();
+            
+            // Check if limit switch is triggered
+            if (isLimitSwitchTriggered()) {
+                limitReached = true;
+                Serial.println("Limit switch reached!");
+                break;
+            }
         }
         
         stepper.stop();
-        return false;
+        
+        if (limitReached) {
+            stepper.setCurrentPosition(0);  // Set current position to 0
+            Serial.println("First phase complete.");
+            return true;
+        } else {
+            Serial.println("Error: Homing timeout in first phase.");
+            return false;
+        }
     }
-    
+
     // Second phase of homing - move away from limit switch
     bool homeSecondPhase() {
-        stepper.setMaxSpeed(MAX_SPEED / 4.);
-        stepper.move(MAX_HOMING_DISTANCE);  // Move motor away from the limit switch
+        Serial.print("Starting homing second phase for ");
+        Serial.print(getAxisName());
+        Serial.println(" axis...");
         
-        if (waitForLimitSwitch(MOVEMENT_TIMEOUT_MS)) {
-            stepper.stop();
-            stepper.setCurrentPosition(0);  // Set current position to 0
-            return true;
+        stepper.setMaxSpeed(MAX_SPEED / 4.);
+        
+        // Move away from the limit switch until it's no longer triggered
+        Serial.println("Moving away from limit switch...");
+        stepper.move(100);  // Move a small amount away
+        
+        unsigned long startTime = millis();
+        bool movedAway = false;
+        
+        // Wait until we're no longer triggering the limit switch
+        while (!movedAway && (millis() - startTime < MOVEMENT_TIMEOUT_MS)) {
+            stepper.run();
+            
+            // Check if we've moved away from the limit switch
+            if (!isLimitSwitchTriggered()) {
+                movedAway = true;
+                Serial.println("Moved away from limit switch!");
+                break;
+            }
         }
         
-        stepper.stop();
-        return false;
+        if (!movedAway) {
+            Serial.println("Error: Failed to move away from limit switch.");
+            return false;
+        }
+        
+        // Now move a small distance further to set the home position
+        stepper.move(50);  // Move a bit more to set the home position
+        while (stepper.distanceToGo() != 0) {
+            stepper.run();
+        }
+        
+        stepper.setCurrentPosition(0);  // Set current position to 0
+        Serial.println("Second phase complete.");
+        return true;
     }
 
     // Complete homing sequence
@@ -205,22 +268,22 @@ public:
         isLimitHit = false;  // Reset limit hit flag
         enable(true);  // Enable the motor before homing
         
-        if (!homeFirstPhase()) {
-            enable(false);  // Disable motor
-            Serial.println("Error: Homing failed in first phase.");
-            return false;
-        }
+        Serial.print("Homing ");
+        Serial.print(getAxisName());
+        Serial.println(" axis...");
         
-        if (!homeSecondPhase()) {
+        if (!homeFirstPhase() || !homeSecondPhase()) {
             enable(false);  // Disable motor
-            Serial.println("Error: Homing failed in second phase.");
+            Serial.println("Error: Homing failed.");
             return false;
         }
         
         isHomed = true;
         enable(false);  // Disable motor
         stepper.setMaxSpeed(MAX_SPEED); // Restore max speed
-        Serial.println("Info: Homing complete.");
+        Serial.print("Info: Homing complete for ");
+        Serial.print(getAxisName());
+        Serial.println(" axis.");
         return true;
     }
 };
