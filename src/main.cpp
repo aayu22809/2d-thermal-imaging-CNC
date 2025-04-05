@@ -5,12 +5,12 @@
 #define PLASMA_POI_TEMPERATURE 35.0
 
 // Pin Definitions
-constexpr int V_LIMIT_SWITCH_PIN = 18;
+constexpr int V_LIMIT_SWITCH_PIN = 18; // No longer necessary to have on comms, can move back to digital.
 constexpr int V_STEP_PIN = 22;
 constexpr int V_DIR_PIN = 24;
 constexpr int V_ENABLE_PIN = 26;
 
-constexpr int H_LIMIT_SWITCH_PIN = 19;
+constexpr int H_LIMIT_SWITCH_PIN = 19; // No longer necessary to have on comms, can move back to digital.
 constexpr int H_STEP_PIN = 23;
 constexpr int H_DIR_PIN = 25;
 constexpr int H_ENABLE_PIN = 27;
@@ -19,17 +19,20 @@ constexpr int H_ENABLE_PIN = 27;
 constexpr int THERMO_SCK_PIN = 6;
 constexpr int THERMO_CS_PIN = 5;
 constexpr int THERMO_SO_PIN = 7;
+constexpr int AD8495_PIN = A0;  // Analog pin for AD8495 breakout
 
 // Motor Parameters
 constexpr float STEPS_PER_MM = 50.0;
+constexpr float STEPS_PER_MM_X = 50.0;  // Keep original for X-axis
+constexpr float STEPS_PER_MM_Y = 50.0;  // Adjust this value for Y-axis
 constexpr int MAX_SPEED = 800;
 constexpr int ACCELERATION = 800;
 
 // Grid Limits & Step Size
-constexpr float X_MIN = 0.0;
-constexpr float X_MAX = 100.0;
-constexpr float Y_MIN = 0.0;
-constexpr float Y_MAX = 100.0;
+constexpr float X_MIN = 3;
+constexpr float X_MAX = 450.0;
+constexpr float Y_MIN = 5;
+constexpr float Y_MAX = 205.0;
 
 // System State Variables
 bool isScanning = false;
@@ -37,7 +40,7 @@ bool liveMonitoring = false;
 float currentX = X_MIN;
 float currentY = Y_MIN;
 unsigned long lastReportTime = 0;
-constexpr int MAX_HOMING_DISTANCE = 1000000;
+constexpr int MAX_HOMING_DISTANCE = 10000;
 
 
 // Thermocouple Object
