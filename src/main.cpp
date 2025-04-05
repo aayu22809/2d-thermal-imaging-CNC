@@ -358,31 +358,43 @@ public:
         verticalSystem.enable(false);
         delay(100);
 
-    isScanning = true;
-
-    for (float y = yMin; y <= yMax; y += stepSize) {
-        verticalSystem.moveToPosition(y);
-
-        for (float x = xMin; x <= xMax; x += stepSize) {
-            horizontalSystem.moveToPosition(x);
-            float temp = thermocouple.readCelsius();
-            if (temp > PLASMA_POI_TEMPERATURE) { // If the temperature is above the plasma POI, slow down the motors
-                horizontalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
-                verticalSystem.stepper.setMaxSpeed(MAX_SPEED / 2.);
-            } else {
-                verticalSystem.stepper.setMaxSpeed(MAX_SPEED);
-                horizontalSystem.stepper.setMaxSpeed(MAX_SPEED);
+        isScanning = true;
+        bool scanLeftToRight = true;
+        
+        // Scan row by row
+        for (float y = yMin; y <= yMax; y += stepSize) {
+            // Move to the start of the row
+            verticalSystem.enable(true);
+            verticalSystem.stepper.moveTo(y * verticalSystem.stepsPerMm);
+            while (verticalSystem.stepper.distanceToGo() != 0) {
+                verticalSystem.stepper.run();
             }
-            Serial.print(x, 2);
-            Serial.print(",");
-            Serial.print(y, 2);
-            Serial.print(",");
-            Serial.println(temp, 2);
+            verticalSystem.enable(false);
+            delay(50); // Allow Y motor to cool and stabilize
+            
+            // Scan in alternating directions
+            if (scanLeftToRight) {
+                scanRowLeftToRight(xMin, xMax, y, stepSize);
+            } else {
+                scanRowRightToLeft(xMin, xMax, y, stepSize);
+            }
+            
+            // Toggle direction for next row
+            scanLeftToRight = !scanLeftToRight;
         }
-    }
 
-    isScanning = false;
-    Serial.println("<SCAN_END>");
+        // Disable both motors when scan is complete
+        horizontalSystem.enable(false);
+        verticalSystem.enable(false);
+        
+        isScanning = false;
+        Serial.println("<SCAN_END>");
+    }
+};
+
+// Start Grid Scan - wrapper function to maintain compatibility
+void startScan(float xMin, float xMax, float yMin, float yMax, float stepSize) {
+    Scanner::startScan(xMin, xMax, yMin, yMax, stepSize);
 }
 
 // Legacy temperature functions - kept for backward compatibility
