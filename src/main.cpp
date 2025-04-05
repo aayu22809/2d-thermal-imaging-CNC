@@ -298,9 +298,10 @@ MotorSystem horizontalSystem(H_DIR_PIN, H_STEP_PIN, H_ENABLE_PIN, H_LIMIT_SWITCH
 // Temperature Sensor Class
 class TemperatureSensor {
 private:
-    // AD8495 parameters
+    // AD8495 parameters - adjusted for better accuracy
     static constexpr float VOLTAGE_OFFSET = 1.25;  // Voltage offset at 0°C (in volts)
     static constexpr float SCALE_FACTOR = 0.005;   // Scale factor (5mV/°C)
+    static constexpr float TEMP_CALIBRATION_OFFSET = -12.0; // Calibration offset to match room temperature
     static constexpr float AREF_VOLTAGE = 5.0;     // Arduino reference voltage (typically 5V)
     static constexpr int ADC_RESOLUTION = 10;      // ADC resolution (10-bit for most Arduinos)
     
@@ -313,7 +314,7 @@ private:
     
     // Convert voltage to temperature
     float convertToTemperature(float voltage) const {
-        return (voltage - VOLTAGE_OFFSET) / SCALE_FACTOR;
+        return (voltage - VOLTAGE_OFFSET) / SCALE_FACTOR + TEMP_CALIBRATION_OFFSET;
     }
     
 public:
