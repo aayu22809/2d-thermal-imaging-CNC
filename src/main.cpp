@@ -1,6 +1,22 @@
 #include <AccelStepper.h>
 #include <MAX6675.h>
 
+/*
+ * This is a simple 2D platform controller for the 2D Platform Controller
+ * project. It is designed to be compatible with the Arduino Uno and other
+ * Arduino-compatible boards.
+ *
+ * The controller is designed to be used with the 2D Platform Controller
+ * project, which  can be used to control the
+ * movement of a 2D platform. The controller is controlled by sending G-code
+ * commands to the serial port, and the movement of the platform is controlled
+ * by the motors.
+ *
+ * @author Aayushya Patel
+ * @version 3.0
+ * @date 2025-04-08
+ */
+
 // Plasma POI temperature
 #define PLASMA_POI_TEMPERATURE 35.0
 
